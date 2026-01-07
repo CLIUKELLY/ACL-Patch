@@ -2,84 +2,107 @@ import streamlit as st
 import cv2
 import numpy as np
 import mediapipe as mp
-from openai import OpenAI
-import os
-from dotenv import load_dotenv
+# We commented out OpenAI for now so you can work OFFLINE
+# from openai import OpenAI 
+# from dotenv import load_dotenv
 
-# 1. Load Environment Variables
-load_dotenv()
+# load_dotenv()
 
-# 2. Setup Page Config (Updated Name)
-st.set_page_config(
-    page_title="ACL-Patch: Recovery Engine", 
-    page_icon="🩹", 
-    layout="wide"
-)
+st.set_page_config(page_title="ACL-Patch: Vision Mode", page_icon="🩹", layout="wide")
 
-# Custom Header
-st.title("🩹 ACL-Patch")
-st.markdown("**System Status:** Pre-Op Phase | **Surgery Date:** Jan 31")
+# --- HELPER FUNCTION: Calculate Angle ---
+def calculate_angle(a, b, c):
+    """
+    Calculates the angle at point b given points a, b, c.
+    Arguments are [x, y] coordinates.
+    """
+    a = np.array(a) # Hip
+    b = np.array(b) # Knee
+    c = np.array(c) # Ankle
+    
+    # Calculate arctan2 (returns radians)
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians*180.0/np.pi)
+    
+    if angle > 180.0:
+        angle = 360-angle
+        
+    return angle
 
-# 3. Sidebar: The "Prehab Agent"
-st.sidebar.header("🧠 Protocol Advisor")
-api_key = os.getenv("OPENAI_API_KEY")
+st.title("🩹 ACL-Patch: Offline Vision Mode")
+st.warning("⚠️ Internet Issue Detected: OpenAI Module Paused. Running in Offline Vision Mode.")
 
-if not api_key:
-    st.sidebar.error("⚠️ API Key missing in .env file")
-else:
-    client = OpenAI(api_key=api_key)
-
-    # Simplified Context for Pre-Op
-    user_query = st.sidebar.text_input("Consult the Protocol:", "Is it safe to do leg extensions?")
-
-    if st.sidebar.button("Analyze Query"):
-        try:
-            with st.spinner("Consulting knowledge base..."):
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "You are 'ACL-Patch', an expert post-op recovery assistant. Current User Status: 3 weeks pre-op. Focus on inflammation reduction and quad retention. Keep answers under 50 words."},
-                        {"role": "user", "content": user_query}
-                    ]
-                )
-                st.sidebar.info(response.choices[0].message.content)
-        except Exception as e:
-            st.sidebar.error(f"Connection Error: {e}")
-
-# 4. Main Area: Vision System
-st.header("👁️ Biometric Scanner")
-col1, col2 = st.columns([2, 1])
+col1, col2 = st.columns([3, 1])
 
 with col1:
-    st.write("Real-time Graft Protection Monitoring")
-    run_camera = st.checkbox("Initialize Camera Feed")
+    run_camera = st.checkbox("Start Bio-Mechanics Scan")
     FRAME_WINDOW = st.image([])
 
 with col2:
-    st.write("**Live Telemetry**")
-    st.metric(label="Knee Angle", value="--°")
-    st.metric(label="Status", value="Standby")
+    st.write("## Real-Time Telemetry")
+    angle_metric = st.empty()
+    status_metric = st.empty()
+    st.markdown("---")
+    st.write("**Target Range:** 0° - 130°")
 
-# Vision Logic
 if run_camera:
     mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose()
+    pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
     cap = cv2.VideoCapture(0)
 
     while run_camera:
         ret, frame = cap.read()
         if not ret:
-            st.error("Camera not detected.")
+            st.error("No camera found.")
             break
-        
-        # Processing
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(image)
-
-        if results.pose_landmarks:
-            mp.solutions.drawing_utils.draw_landmarks(
-                image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             
-        FRAME_WINDOW.image(image)
-    
+        # Recolor to RGB
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        results = pose.process(image)
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        # Extract Landmarks
+        try:
+            landmarks = results.pose_landmarks.landmark
+            
+            # Get coordinates for LEFT leg (Change to RIGHT_HIP etc. if needed)
+            hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
+            knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
+            ankle = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+            
+            # Calculate Angle
+            angle = calculate_angle(hip, knee, ankle)
+            
+            # Update Dashboard
+            angle_metric.metric("Knee Angle", f"{int(angle)}°")
+            
+            # Visual Logic (Safety Check)
+            if angle > 170:
+                status_metric.error("⚠️ HYPER EXTENSION")
+                color = (0, 0, 255) # Red
+            elif angle < 45:
+                status_metric.warning("⚠️ DEEP FLEXION")
+                color = (0, 165, 255) # Orange
+            else:
+                status_metric.success("✅ SAFE ZONE")
+                color = (255, 255, 255) # White
+                
+            # Render Angle on Video
+            cv2.putText(image, str(int(angle)), 
+                           tuple(np.multiply(knee, [640, 480]).astype(int)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA
+                        )
+            
+        except:
+            pass # Pose not detected
+
+        # Draw stick figure
+        if results.pose_landmarks:
+            mp.solutions.drawing_utils.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+        # Convert back to RGB for Streamlit
+        FRAME_WINDOW.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
     cap.release()
