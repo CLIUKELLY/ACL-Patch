@@ -43,69 +43,83 @@ def show_home():
     st.markdown("---")
     st.info("ℹ️ **Daily Task:** Please record your baseline measurements in the 'Vision System' tab.")
 
-# --- PAGE 2: VISION SYSTEM (Upload Mode) ---
+# --- PAGE 2: VISION SYSTEM (Updated for Accuracy) ---
 def show_vision():
     st.title("👁️ Bio-Mechanics Scanner")
-    st.markdown("**Mode:** Static Image Analysis")
-    st.info("Upload a photo of your movement (Side View) to measure knee angles.")
-
-    # 1. File Uploader
-    uploaded_file = st.file_uploader("Upload Image", type=['jpg', 'jpeg', 'png'])
-
-    if uploaded_file is not None:
-        # Load the image
-        image = Image.open(uploaded_file)
-        image_np = np.array(image) # Convert to numpy for MediaPipe
-
-        # Create 2 columns: Original vs Analyzed
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(image, caption="Original Photo", use_container_width=True)
-
-        # 2. Process with MediaPipe
-        mp_pose = mp.solutions.pose
+    
+    # 1. NEW: Settings Sidebar for this page
+    col_settings, col_display = st.columns([1, 3])
+    
+    with col_settings:
+        st.markdown("### ⚙️ Scanner Settings")
+        # Toggle: Which leg to track?
+        target_side = st.radio("Select Leg to Track:", ["Left Leg", "Right Leg"], index=0)
         
-        # static_image_mode=True is more accurate for photos
+        # Toggle: How to display 0 degrees?
+        # Clinical: 0° is straight. Geometric: 180° is straight.
+        mode = st.radio("Angle Mode:", ["Geometric (180° = Straight)", "Clinical (0° = Straight)"], index=0)
+        
+        uploaded_file = st.file_uploader("Upload Image", type=['jpg', 'jpeg', 'png'])
+
+    # 2. Process Image
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        image_np = np.array(image)
+
+        # Initialize MediaPipe
+        mp_pose = mp.solutions.pose
         with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
             results = pose.process(image_np)
-            
-            # Create a copy to draw on
             annotated_image = image_np.copy()
 
             if results.pose_landmarks:
-                # Draw the skeleton
-                mp.solutions.drawing_utils.draw_landmarks(
-                    annotated_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+                landmarks = results.pose_landmarks.landmark
                 
-                # Extract Landmarks
-                try:
-                    landmarks = results.pose_landmarks.landmark
+                # --- NEW: Dynamic Leg Selection ---
+                if target_side == "Left Leg":
+                    # Get Left coordinates
+                    a = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
+                    b = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
+                    c = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+                    color = (255, 0, 0) # Red color for Left
+                else:
+                    # Get Right coordinates
+                    a = [landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y]
+                    b = [landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
+                    c = [landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
+                    color = (0, 0, 255) # Blue color for Right
+                
+                # Calculate Angle
+                angle = calculate_angle(a, b, c)
+
+                # --- NEW: Clinical Conversion ---
+                display_angle = angle
+                if mode == "Clinical (0° = Straight)":
+                    display_angle = abs(180 - angle)
+
+                # Visuals
+                with col_display:
+                    # Draw the specific triangle we are measuring
+                    h, w, _ = annotated_image.shape
                     
-                    # Get coordinates (Left Leg)
-                    hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
-                    knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
-                    ankle = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+                    # Draw Lines (Thick)
+                    cv2.line(annotated_image, tuple(np.multiply(a, [w, h]).astype(int)), tuple(np.multiply(b, [w, h]).astype(int)), color, 5)
+                    cv2.line(annotated_image, tuple(np.multiply(b, [w, h]).astype(int)), tuple(np.multiply(c, [w, h]).astype(int)), color, 5)
                     
-                    # Calculate Angle
-                    angle = calculate_angle(hip, knee, ankle)
+                    # Draw Circle at Knee
+                    cv2.circle(annotated_image, tuple(np.multiply(b, [w, h]).astype(int)), 10, (255, 255, 255), -1)
+
+                    st.image(annotated_image, caption=f"Analyzed: {target_side}", use_container_width=True)
                     
-                    # Display Result in Column 2
-                    with col2:
-                        st.image(annotated_image, caption=f"Analyzed: {int(angle)}° Knee Flexion", use_container_width=True)
-                        
-                        # Data Card
-                        if angle > 170:
-                            st.error(f"⚠️ **{int(angle)}°** - Hyperextension Risk")
-                        elif angle < 45:
-                            st.warning(f"⚠️ **{int(angle)}°** - Deep Flexion (Caution)")
-                        else:
-                            st.success(f"✅ **{int(angle)}°** - Safe Range")
-                            
-                except Exception as e:
-                    st.error(f"Could not calculate angle. Ensure full body is visible. ({e})")
+                    # Result Card
+                    st.metric(label=f"{target_side} Angle", value=f"{int(display_angle)}°")
+                    
+                    if angle > 165: # Geometric Straight
+                        st.success("Leg is Fully Extended (Safe)")
+                    elif angle < 60:
+                        st.warning("Deep Flexion Detected")
             else:
-                with col2:
-                    st.warning("⚠️ No human detected in the image.")
+                st.error("No pose detected. Try a clear side-profile photo.")
 
 # --- PAGE 3: AI COACH (The Brain) ---
 def show_coach():
