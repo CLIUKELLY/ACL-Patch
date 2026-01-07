@@ -1,0 +1,10 @@
+streamlit       # The Dashboard/UI
+openai          # The Brain (GPT-4o-mini)
+mediapipe       # The Eye (Computer Vision)
+opencv-python   # Video processing
+numpy           # Math for angles
+python-dotenv   # Security (hides your API key)
+langchain       # Orchestration (for RAG later)
+langchain-community
+chromadb        # Vector Database (for PDF knowledge)
+Pillow
